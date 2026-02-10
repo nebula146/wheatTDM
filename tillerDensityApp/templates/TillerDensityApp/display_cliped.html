@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clipped Image</title>
+    <!-- Include Plotly.js -->
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <h1>Clipped Image</h1>
+    {% if clipped_image_html %}
+        {{ clipped_image_html|safe }}
+    {% else %}
+        <p>No image to display.</p>
+    {% endif %}
+    <p><a href="{% url 'home' %}">Back to Home</a></p>
+</body>
+</html>

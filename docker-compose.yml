@@ -1,0 +1,54 @@
+services:
+  web:
+    build: .
+    command: gunicorn tillerDensity.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount the service account key inside the container
+      - ./secrets/gee-key.json:/app/secrets/gee-key.json:ro
+      # Persist media outputs (COGs, etc.)
+      - ./media:/app/media
+    environment:
+      DJANGO_DEBUG: "False"
+      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:-changeme}"
+      DJANGO_ALLOWED_HOSTS: "localhost,127.0.0.1"
+      POSTGRES_NAME: "${POSTGRES_DB:-geodjango_db}"
+      POSTGRES_USER: "${POSTGRES_USER:-trying_geodjango}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+      POSTGRES_HOST: "db"
+      POSTGRES_PORT: "5432"
+      GEE_SERVICE_ACCOUNT: "${GEE_SERVICE_ACCOUNT:-}"
+      GEE_KEY_FILE: "${GEE_KEY_FILE:-}"
+      GEE_PROJECT: "${GEE_PROJECT:-}"
+      HLS_SEARCH_WINDOW_DAYS: "${HLS_SEARCH_WINDOW_DAYS:-7}"
+      LEGACY_INFER_URL: "${LEGACY_INFER_URL:-http://legacy-infer:5001/predict}"
+    depends_on:
+      - db
+      - legacy-infer
+    restart: unless-stopped
+
+  legacy-infer:
+    build:
+      context: ./legacy_infer
+    environment:
+      LEGACY_MODEL_PATH: "${LEGACY_MODEL_PATH:-/models/PS_1DCNN_best_model.h5}"
+      TF_CPP_MIN_LOG_LEVEL: "2"
+    volumes:
+      - ./tillerDensityModel:/models:ro
+    restart: unless-stopped
+
+  db:
+    image: postgis/postgis:15-3.4
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-geodjango_db}"
+      POSTGRES_USER: "${POSTGRES_USER:-trying_geodjango}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  pgdata:

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>{{ page_title }}</title>
+  {% load static %}
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+  <link rel="stylesheet" href="https://code.jquery.com/ui/1.13.2/themes/smoothness/jquery-ui.css" />
+  <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20260209g">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="left-rail">
+      <div class="brand-block">
+        <div class="brand-logo-wrap">
+          <img
+            class="brand-logo"
+            src="{% static 'img/tiller-logo.png' %}"
+            alt="Tiller Density Logo"
+            onerror="this.style.display='none';"
+          />
+        </div>
+        <h1>{{ brand_title }}</h1>
+      </div>
+
+      <div class="rail-actions">
+        <div class="rail-date-card">
+          <label for="date-input">Date of Inspection</label>
+          <input type="date" id="date-input" />
+        </div>
+        <button id="tiller-density-button" class="rail-button rail-button-primary" disabled>
+          <span class="rail-button-title">Generate Tiller Map</span>
+          <span class="rail-button-sub">Run inference and visualize density</span>
+        </button>
+        <button id="report-button" class="rail-button rail-button-primary" disabled>
+          <span class="rail-button-title">Generate Report</span>
+          <span class="rail-button-sub">Summary stats and classified views</span>
+        </button>
+        <button id="nutrient-prescription-button" class="rail-button" disabled>
+          <span class="rail-button-title">Nutrient Prescription</span>
+          <span class="rail-button-sub">Coming soon</span>
+        </button>
+      </div>
+
+      <!-- <div class="rail-hint">
+        Draw AOI on the map, select a date, then generate.
+      </div> -->
+
+      <div class="rail-footer">
+        <button id="sign-in-button" type="button" class="rail-footer-button rail-footer-signin">Sign in</button>
+        <button id="user-guide-button" type="button" class="rail-footer-button">User guide</button>
+        <button id="about-us-button" type="button" class="rail-footer-button">About us</button>
+        <button id="contact-us-button" type="button" class="rail-footer-button">Contact us</button>
+      </div>
+    </aside>
+
+    <main class="map-stage">
+      <div id="map"></div>
+
+      <section id="tiller-density-map" class="result-panel result-panel-map">
+        <div class="panel-header">
+          <h3>Tiller Density Map</h3>
+          <div class="panel-actions">
+            <button type="button" class="panel-minimize" data-panel="tiller-density-map">Minimize</button>
+            <button type="button" class="panel-close" data-panel="tiller-density-map">Close</button>
+          </div>
+        </div>
+        <div id="tiller-density-map-content"></div>
+      </section>
+
+      <section id="report-container" class="result-panel result-panel-report">
+        <div class="panel-header">
+          <h3>Wheat Monitoring Report</h3>
+          <div class="panel-actions">
+            <button type="button" class="panel-minimize" data-panel="report-container">Minimize</button>
+            <button type="button" class="panel-close" data-panel="report-container">Close</button>
+          </div>
+        </div>
+        <div id="report-content"></div>
+      </section>
+
+      <div id="minimized-dock" class="minimized-dock"></div>
+    </main>
+  </div>
+
+  <div class="toast"></div>
+
+  <div id="about-modal" class="info-modal" aria-hidden="true" role="dialog" aria-labelledby="about-modal-title">
+    <div class="info-modal-card" role="document">
+      <button id="about-modal-close" type="button" class="info-modal-close" aria-label="Close About us dialog">x</button>
+      <h2 id="about-modal-title">About Wheat-TDM v1</h2>
+      <p>
+        Wheat-TDM v1 is a map-first decision-support application for wheat field monitoring.
+        It combines satellite data processing, AOI-based analysis, and rapid visualization to help
+        users assess tiller density patterns across fields.
+      </p>
+      <p>
+        This current section uses placeholder content. You can replace it with your official
+        project description, organization details, team members, and release notes.
+      </p>
+      <p>
+        Version: 1.0 (Demo)<br>
+        Data Source: HLS (Sentinel/Landsat blend)<br>
+        Interface: Django + Leaflet
+      </p>
+    </div>
+  </div>
+
+  <div id="guide-modal" class="info-modal" aria-hidden="true" role="dialog" aria-labelledby="guide-modal-title">
+    <div class="info-modal-card guide-modal-card" role="document">
+      <button id="guide-modal-close" type="button" class="info-modal-close" aria-label="Close User guide dialog">x</button>
+      <h2 id="guide-modal-title">User Guide</h2>
+      <p class="guide-intro">
+        Follow this quick workflow to run the app from start to finish.
+      </p>
+      <div class="guide-flow">
+        <section class="guide-step">
+          <div class="guide-step-num">1</div>
+          <div class="guide-step-body">
+            <h3>Draw AOI</h3>
+            <p>Use the draw tools on the map and create one polygon around your field boundary.</p>
+          </div>
+        </section>
+        <section class="guide-step">
+          <div class="guide-step-num">2</div>
+          <div class="guide-step-body">
+            <h3>Select Date</h3>
+            <p>Pick the field inspection date from <strong>Date of Inspection</strong> on the left panel.</p>
+          </div>
+        </section>
+        <section class="guide-step">
+          <div class="guide-step-num">3</div>
+          <div class="guide-step-body">
+            <h3>Generate Tiller Map</h3>
+            <p>Click <strong>Generate Tiller Map</strong> and wait for the raster layer to render.</p>
+          </div>
+        </section>
+        <section class="guide-step">
+          <div class="guide-step-num">4</div>
+          <div class="guide-step-body">
+            <h3>Generate Report</h3>
+            <p>Click <strong>Generate Report</strong> to open summary KPIs and classified map outputs.</p>
+          </div>
+        </section>
+      </div>
+      <div class="guide-tips">
+        <h4>Quick Tips</h4>
+        <ul>
+          <li>Draw one clean AOI at a time for best results.</li>
+          <li>If buttons are disabled, confirm both AOI and date are selected.</li>
+          <li>Use panel minimize/close controls to keep the map workspace clear.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://code.jquery.com/ui/1.13.2/jquery-ui.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/geotiff@2.0.4/dist-browser/geotiff.js"></script>
+  <script src="https://unpkg.com/georaster"></script>
+  <script src="https://unpkg.com/georaster-layer-for-leaflet"></script>
+  <script src="https://unpkg.com/chroma-js@2.4.2/chroma.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+  <script src="{% static 'js/app.js' %}?v=20260210f"></script>
+</body>
+</html>
