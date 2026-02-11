@@ -30,7 +30,7 @@
           <input type="date" id="date-input" />
         </div>
         <button id="tiller-density-button" class="rail-button rail-button-primary" disabled>
-          <span class="rail-button-title">Generate Tiller Map</span>
+          <span class="rail-button-title">Generate Tiller Density Map</span>
           <span class="rail-button-sub">Run inference and visualize density</span>
         </button>
         <button id="report-button" class="rail-button rail-button-primary" disabled>
@@ -62,8 +62,8 @@
         <div class="panel-header">
           <h3>Tiller Density Map</h3>
           <div class="panel-actions">
-            <button type="button" class="panel-minimize" data-panel="tiller-density-map">Minimize</button>
-            <button type="button" class="panel-close" data-panel="tiller-density-map">Close</button>
+            <button type="button" class="panel-minimize" data-panel="tiller-density-map" aria-label="Minimize panel">-</button>
+            <button type="button" class="panel-close" data-panel="tiller-density-map" aria-label="Close panel">x</button>
           </div>
         </div>
         <div id="tiller-density-map-content"></div>
@@ -73,8 +73,9 @@
         <div class="panel-header">
           <h3>Wheat Monitoring Report</h3>
           <div class="panel-actions">
-            <button type="button" class="panel-minimize" data-panel="report-container">Minimize</button>
-            <button type="button" class="panel-close" data-panel="report-container">Close</button>
+            <button type="button" id="report-download-button" class="panel-download" aria-label="Download report as PDF">PDF</button>
+            <button type="button" class="panel-minimize" data-panel="report-container" aria-label="Minimize panel">-</button>
+            <button type="button" class="panel-close" data-panel="report-container" aria-label="Close panel">x</button>
           </div>
         </div>
         <div id="report-content"></div>
@@ -91,18 +92,21 @@
       <button id="about-modal-close" type="button" class="info-modal-close" aria-label="Close About us dialog">x</button>
       <h2 id="about-modal-title">About Wheat-TDM v1</h2>
       <p>
-        Wheat-TDM v1 is a map-first decision-support application for wheat field monitoring.
-        It combines satellite data processing, AOI-based analysis, and rapid visualization to help
-        users assess tiller density patterns across fields.
+        Wheat-TDM (Version 1.0) is a cloud-based digital tool designed to support timely, within-field
+        wheat tiller density mapping at 30 m spatial resolution during the tillering to jointing growth
+        stages. The platform automatically generates maps for user-selected wheat fields or regions using
+        satellite imagery and AI-based models.
       </p>
       <p>
-        This current section uses placeholder content. You can replace it with your official
-        project description, organization details, team members, and release notes.
+        Wheat-TDM is a collaborative effort between the Remote Sensing &amp; Agricultural Intelligence (RSAI)
+        Lab (PI: Dr. Maitiniyazi Maimaitijiang, Assistant Professor) and the Winter Wheat Breeding and
+        Innovation Lab (PI: Dr. Sunish Kumar Sehgal, Professor) at South Dakota State University, with
+        important contributions from PhD student Santosh Subedi.
       </p>
       <p>
-        Version: 1.0 (Demo)<br>
-        Data Source: HLS (Sentinel/Landsat blend)<br>
-        Interface: Django + Leaflet
+        Development of Wheat-TDM Version 1.0 has been primarily supported by the South Dakota Wheat
+        Commission, along with the South Dakota State University Challenge Fund Program, and the
+        Sustainable Agriculture Research and Education (SARE) program.
       </p>
     </div>
   </div>
@@ -132,8 +136,8 @@
         <section class="guide-step">
           <div class="guide-step-num">3</div>
           <div class="guide-step-body">
-            <h3>Generate Tiller Map</h3>
-            <p>Click <strong>Generate Tiller Map</strong> and wait for the raster layer to render.</p>
+            <h3>Generate Tiller Density Map</h3>
+            <p>Click <strong>Generate Tiller Density Map</strong> and wait for the raster layer to render.</p>
           </div>
         </section>
         <section class="guide-step">
@@ -164,6 +168,8 @@
   <script src="https://unpkg.com/georaster-layer-for-leaflet"></script>
   <script src="https://unpkg.com/chroma-js@2.4.2/chroma.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
-  <script src="{% static 'js/app.js' %}?v=20260210f"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="{% static 'js/app.js' %}?v=20260211c"></script>
 </body>
 </html>

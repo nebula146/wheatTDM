@@ -2,8 +2,9 @@
   const csrfMeta = document.querySelector('meta[name="csrf-token"]');
   const csrftoken = csrfMeta ? csrfMeta.getAttribute('content') : '';
   const NODATA = -99999;
+  const MIN_OVERLAY_LONG_SIDE_PX = 900;
+  const MAX_OVERLAY_UPSCALE = 32;
   const renderedPanelMaps = new Map();
-  const MAIN_MAP_RASTER_RESOLUTION = 24;
   const PANEL_MAP_RASTER_RESOLUTION = 32;
 
   function reportBootstrapError(message) {
@@ -74,6 +75,8 @@
     window.drawnGeoJSON = e.layer.toGeoJSON();
     window.crs = 'EPSG:4326';
     window.tillerCogUrl = null;
+    window.classifiedCogUrl = null;
+    window.classBreaks = null;
     clearMainTillerOverlay();
     setSelectedActionButton(null);
     maybeEnableButtons();
@@ -82,6 +85,7 @@
   const dateInput = document.getElementById('date-input');
   const tillerBtn = document.getElementById('tiller-density-button');
   const reportBtn = document.getElementById('report-button');
+  const reportDownloadBtn = document.getElementById('report-download-button');
   const nutrientBtn = document.getElementById('nutrient-prescription-button');
   const userGuideBtn = document.getElementById('user-guide-button');
   const guideModal = document.getElementById('guide-modal');
@@ -427,6 +431,116 @@
   setupModal(aboutUsBtn, aboutModal, aboutModalCloseBtn);
   setupModal(userGuideBtn, guideModal, guideModalCloseBtn);
 
+  async function fitMapForPdfBestView(mapInstance) {
+    if (!mapInstance) return;
+
+    mapInstance.invalidateSize();
+
+    let combinedBounds = null;
+    mapInstance.eachLayer((layer) => {
+      if (!layer || typeof layer.getBounds !== 'function') return;
+      if (typeof L !== 'undefined' && layer instanceof L.TileLayer) return;
+      const b = layer.getBounds();
+      if (!b || typeof b.isValid !== 'function' || !b.isValid()) return;
+      if (!combinedBounds) {
+        combinedBounds = L.latLngBounds(b.getSouthWest(), b.getNorthEast());
+      } else {
+        combinedBounds.extend(b);
+      }
+    });
+
+    if (combinedBounds && combinedBounds.isValid()) {
+      mapInstance.fitBounds(combinedBounds, { animate: false, padding: [18, 18] });
+      await waitForMoveEndOrTimeout(mapInstance, 140);
+    }
+    mapInstance.invalidateSize();
+  }
+
+  async function downloadReportPdf() {
+    const reportPanel = document.getElementById('report-container');
+    const reportContent = document.getElementById('report-content');
+    if (!reportPanel || reportPanel.style.display === 'none') {
+      showToast('Open the report before downloading PDF.', true);
+      return;
+    }
+    if (!reportContent || !reportContent.classList.contains('report-layout')) {
+      showToast('Generate report content before downloading PDF.', true);
+      return;
+    }
+    if (typeof window.html2canvas !== 'function' || !window.jspdf || !window.jspdf.jsPDF) {
+      showToast('PDF export library is unavailable.', true);
+      return;
+    }
+
+    const originalLabel = reportDownloadBtn ? reportDownloadBtn.textContent : '';
+    try {
+      if (reportDownloadBtn) {
+        reportDownloadBtn.disabled = true;
+        reportDownloadBtn.textContent = '...';
+      }
+
+      const densityMap = renderedPanelMaps.get('density-map');
+      const classifiedMap = renderedPanelMaps.get('classified-map');
+      await fitMapForPdfBestView(densityMap);
+      await fitMapForPdfBestView(classifiedMap);
+
+      const canvas = await window.html2canvas(reportPanel, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#274563',
+      });
+      const imgData = canvas.toDataURL('image/png');
+
+      const { jsPDF } = window.jspdf;
+      const margin = 6;
+      const a4Portrait = { width: 210, height: 297 };
+      const a4Landscape = { width: 297, height: 210 };
+      const imageAspect = canvas.width / Math.max(1, canvas.height);
+      const fitWithinPage = (page) => {
+        const maxWidth = page.width - margin * 2;
+        const maxHeight = page.height - margin * 2;
+        let drawWidth = maxWidth;
+        let drawHeight = drawWidth / imageAspect;
+        if (drawHeight > maxHeight) {
+          drawHeight = maxHeight;
+          drawWidth = drawHeight * imageAspect;
+        }
+        return { drawWidth, drawHeight };
+      };
+
+      const portraitFit = fitWithinPage(a4Portrait);
+      const landscapeFit = fitWithinPage(a4Landscape);
+      const useLandscape = (landscapeFit.drawWidth * landscapeFit.drawHeight) > (portraitFit.drawWidth * portraitFit.drawHeight);
+
+      const pdf = new jsPDF(useLandscape ? 'l' : 'p', 'mm', 'a4');
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const bestFit = useLandscape ? landscapeFit : portraitFit;
+      const x = (pageWidth - bestFit.drawWidth) / 2;
+      const y = (pageHeight - bestFit.drawHeight) / 2;
+
+      // Single-page export: scale and center the full report image inside A4 bounds.
+      pdf.addImage(imgData, 'PNG', x, y, bestFit.drawWidth, bestFit.drawHeight, undefined, 'FAST');
+
+      const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+      pdf.save(`wheat-tdm-report-${ts}.pdf`);
+      showToast('Report PDF downloaded');
+    } catch (err) {
+      console.error(err);
+      showToast(`Failed to download PDF: ${err.message || err}`, true);
+    } finally {
+      if (reportDownloadBtn) {
+        reportDownloadBtn.disabled = false;
+        reportDownloadBtn.textContent = originalLabel || 'PDF';
+      }
+    }
+  }
+
+  if (reportDownloadBtn) {
+    reportDownloadBtn.addEventListener('click', downloadReportPdf);
+  }
+
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     [aboutModal, guideModal].forEach((modalEl) => {
@@ -490,6 +604,111 @@
     return flattened;
   }
 
+  function inferEpsgCode(georaster) {
+    if (!georaster) return null;
+    const projection = georaster.projection;
+    if (Number.isFinite(Number(projection))) return Number(projection);
+    const hints = [
+      projection,
+      georaster.proj4,
+      georaster.projcode,
+      georaster.srs
+    ]
+      .map((v) => (v == null ? '' : String(v)))
+      .join(' ')
+      .toUpperCase();
+    const match = hints.match(/EPSG[:/ ]?(\d{4,5})/);
+    return match ? Number(match[1]) : null;
+  }
+
+  function georasterBoundsToLatLngBounds(georaster) {
+    if (!georaster) return null;
+    const xmin = Number(georaster.xmin);
+    const xmax = Number(georaster.xmax);
+    const ymin = Number(georaster.ymin);
+    const ymax = Number(georaster.ymax);
+    if (![xmin, xmax, ymin, ymax].every(Number.isFinite)) return null;
+
+    const epsg = inferEpsgCode(georaster);
+    const looksLikeLatLng =
+      Math.abs(xmin) <= 180 &&
+      Math.abs(xmax) <= 180 &&
+      Math.abs(ymin) <= 90 &&
+      Math.abs(ymax) <= 90;
+    if (epsg === 4326 || looksLikeLatLng) {
+      return L.latLngBounds([ymin, xmin], [ymax, xmax]);
+    }
+
+    const sw = L.CRS.EPSG3857.unproject(L.point(xmin, ymin));
+    const ne = L.CRS.EPSG3857.unproject(L.point(xmax, ymax));
+    return L.latLngBounds(sw, ne);
+  }
+
+  function buildRasterOverlayDataUrl(georaster, colorForValue) {
+    const bandRows = georaster && georaster.values ? georaster.values[0] : null;
+    if (!bandRows || !bandRows.length) {
+      throw new Error('Raster grid is unavailable for overlay rendering.');
+    }
+
+    const height = Number(georaster.height) || bandRows.length;
+    const firstRow = bandRows[0];
+    const inferredWidth = (Array.isArray(firstRow) || ArrayBuffer.isView(firstRow)) ? firstRow.length : 0;
+    const width = Number(georaster.width) || inferredWidth;
+    if (!width || !height) {
+      throw new Error('Raster dimensions are invalid.');
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Unable to create raster overlay canvas.');
+
+    const imageData = ctx.createImageData(width, height);
+    const pixels = imageData.data;
+    let offset = 0;
+    for (let y = 0; y < height; y += 1) {
+      const row = bandRows[y];
+      for (let x = 0; x < width; x += 1) {
+        const rawValue = (Array.isArray(row) || ArrayBuffer.isView(row)) ? row[x] : row;
+        const scalar = Number(rawValue);
+        const color = colorForValue(scalar, x, y);
+        if (color) {
+          pixels[offset] = color[0];
+          pixels[offset + 1] = color[1];
+          pixels[offset + 2] = color[2];
+          pixels[offset + 3] = color[3] == null ? 255 : color[3];
+        } else {
+          pixels[offset] = 0;
+          pixels[offset + 1] = 0;
+          pixels[offset + 2] = 0;
+          pixels[offset + 3] = 0;
+        }
+        offset += 4;
+      }
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+
+    // Upscale tiny rasters with nearest-neighbor to avoid browser blur.
+    const longestSide = Math.max(width, height);
+    let upscaleFactor = Math.ceil(MIN_OVERLAY_LONG_SIDE_PX / Math.max(1, longestSide));
+    upscaleFactor = Math.max(1, Math.min(MAX_OVERLAY_UPSCALE, upscaleFactor));
+    if (upscaleFactor === 1) {
+      return canvas.toDataURL('image/png');
+    }
+
+    const upscaled = document.createElement('canvas');
+    upscaled.width = width * upscaleFactor;
+    upscaled.height = height * upscaleFactor;
+    const upCtx = upscaled.getContext('2d');
+    if (!upCtx) return canvas.toDataURL('image/png');
+    upCtx.imageSmoothingEnabled = false;
+    upCtx.drawImage(canvas, 0, 0, upscaled.width, upscaled.height);
+
+    return upscaled.toDataURL('image/png');
+  }
+
   function buildCdfMap(values) {
     const freq = new Map();
     values.forEach(v => freq.set(v, (freq.get(v) || 0) + 1));
@@ -502,15 +721,6 @@
       cdf.set(v, cumulative / total);
     });
     return cdf;
-  }
-
-  function buildColorLookup(scale, alpha = 1.0, steps = 256) {
-    const colors = new Array(steps);
-    for (let i = 0; i < steps; i += 1) {
-      const t = i / Math.max(1, steps - 1);
-      colors[i] = scale(t).alpha(alpha).css();
-    }
-    return colors;
   }
 
   function formatNumber(value, digits = 2) {
@@ -578,6 +788,48 @@
     }
   }
 
+  function alignTillerLegendBetweenControls(mapInstance, legendControl, layerControlInstance, scaleControlInstance) {
+    if (!mapInstance || !legendControl) return;
+    const mapEl = mapInstance.getContainer ? mapInstance.getContainer() : null;
+    const legendEl = legendControl.getContainer ? legendControl.getContainer() : null;
+    const layersEl = layerControlInstance && layerControlInstance.getContainer ? layerControlInstance.getContainer() : null;
+    const scaleEl = scaleControlInstance && scaleControlInstance.getContainer ? scaleControlInstance.getContainer() : null;
+    if (!legendEl || !mapEl) return;
+
+    // Take legend out of Leaflet's stacked corner flow and place it explicitly.
+    if (legendEl.parentElement !== mapEl) {
+      mapEl.appendChild(legendEl);
+    }
+
+    const apply = () => {
+      const controlInset = 12;
+      const controlGap = 22;
+      const mapWidth = mapInstance.getSize ? mapInstance.getSize().x : 0;
+      const layersWidth = layersEl ? layersEl.offsetWidth : 0;
+      const scaleWidth = scaleEl ? scaleEl.offsetWidth : 0;
+      const leftOffset = Math.max(controlInset, layersWidth + controlInset + controlGap);
+      const rightReserve = Math.max(controlInset + 4, scaleWidth + controlInset + 8);
+      const available = mapWidth - leftOffset - rightReserve;
+      const width = Math.min(250, Math.max(160, available));
+
+      if (layersEl) {
+        layersEl.style.marginLeft = `${controlInset}px`;
+        layersEl.style.marginBottom = `${controlInset}px`;
+      }
+
+      legendEl.style.position = 'absolute';
+      legendEl.style.left = `${leftOffset}px`;
+      legendEl.style.bottom = `${controlInset}px`;
+      legendEl.style.margin = '0';
+      legendEl.style.zIndex = '650';
+      legendEl.style.width = `${width}px`;
+    };
+
+    apply();
+    setTimeout(apply, 0);
+    mapInstance.on('resize', apply);
+  }
+
   function ensureLayerPainted(mapInstance, layerInstance) {
     return new Promise((resolve) => {
       const repaint = () => {
@@ -637,44 +889,29 @@
     const stretchMax = pHigh > pLow ? pHigh : bandMax > bandMin ? bandMax : bandMin + 1e-6;
     const palette = ['#ffffe5', '#f7fcb9', '#d9f0a3', '#addd8e', '#78c679', '#41ab5d', '#238443', '#006837', '#004529'];
     const scale = chroma.scale(palette).domain([0, 1]);
-    const colorLookup = buildColorLookup(scale, 0.92, 256);
-
-    const normalizedValue = (val) => {
-      const scalar = toScalarPixelValue(val);
-      if (!Number.isFinite(scalar) || scalar === NODATA) return null;
-      const denom = Math.max(1e-9, stretchMax - stretchMin);
-      return Math.max(0, Math.min(1, (scalar - stretchMin) / denom));
-    };
 
     clearMainTillerOverlay();
 
-    const layer = new GeoRasterLayer({
-      georaster,
-      opacity: 1.0,
-      resolution: MAIN_MAP_RASTER_RESOLUTION,
-      resampleMethod: 'nearest',
-      keepBuffer: 2,
-      pixelValuesToColorFn: (val) => {
-        const z = normalizedValue(val);
-        if (z === null) return 'rgba(0,0,0,0)';
-        const idx = Math.max(0, Math.min(255, Math.round(z * 255)));
-        return colorLookup[idx];
-      }
+    const bounds = georasterBoundsToLatLngBounds(georaster);
+    if (!bounds || !bounds.isValid()) {
+      throw new Error('Could not determine raster bounds for map overlay.');
+    }
+    const overlayImageUrl = buildRasterOverlayDataUrl(georaster, (scalar) => {
+      if (!Number.isFinite(scalar) || scalar === NODATA) return null;
+      const denom = Math.max(1e-9, stretchMax - stretchMin);
+      const z = Math.max(0, Math.min(1, (scalar - stretchMin) / denom));
+      const rgba = scale(z).rgba();
+      return [Math.round(rgba[0]), Math.round(rgba[1]), Math.round(rgba[2]), 255];
     });
+    const layer = L.imageOverlay(overlayImageUrl, bounds, { opacity: 1.0, interactive: false });
 
     layer.addTo(map);
     layerControl.addOverlay(layer, 'Tiller Density Overlay');
     mainTillerLayer = layer;
 
-    map.once('moveend', () => {
-      void ensureLayerPainted(map, layer);
-    });
-    const bounds = layer.getBounds();
-    if (bounds && typeof bounds.isValid === 'function' && bounds.isValid()) {
-      map.fitBounds(bounds, { padding: [18, 18], animate: false });
-    }
+    map.fitBounds(bounds, { padding: [18, 18], animate: false });
     await waitForMoveEndOrTimeout(map, 200);
-    await ensureLayerPainted(map, layer);
+    await ensureLayerPainted(map, null);
 
     const mapScale = L.control.scale({ position: 'bottomleft', metric: true, imperial: false });
     mapScale.addTo(map);
@@ -719,28 +956,19 @@
     // ArcGIS-like green sequential stretch (light to dark green).
     const palette = ['#ffffe5', '#f7fcb9', '#d9f0a3', '#addd8e', '#78c679', '#41ab5d', '#238443', '#006837', '#004529'];
     const scale = chroma.scale(palette).domain([0, 1]);
-    const colorLookup = buildColorLookup(scale, 1.0, 256);
 
-    const normalizedValue = (val) => {
-      const scalar = toScalarPixelValue(val);
+    const bounds = georasterBoundsToLatLngBounds(georaster);
+    if (!bounds || !bounds.isValid()) {
+      throw new Error('Could not determine raster bounds for map overlay.');
+    }
+    const overlayImageUrl = buildRasterOverlayDataUrl(georaster, (scalar) => {
       if (!Number.isFinite(scalar) || scalar === NODATA) return null;
       const denom = Math.max(1e-9, stretchMax - stretchMin);
-      return Math.max(0, Math.min(1, (scalar - stretchMin) / denom));
-    };
-
-    const layer = new GeoRasterLayer({
-      georaster,
-      opacity: 1.0,
-      resolution: PANEL_MAP_RASTER_RESOLUTION,
-      resampleMethod: 'nearest',
-      keepBuffer: 2,
-      pixelValuesToColorFn: (val) => {
-        const z = normalizedValue(val);
-        if (z === null) return 'rgba(0,0,0,0)';
-        const idx = Math.max(0, Math.min(255, Math.round(z * 255)));
-        return colorLookup[idx];
-      }
+      const z = Math.max(0, Math.min(1, (scalar - stretchMin) / denom));
+      const rgba = scale(z).rgba();
+      return [Math.round(rgba[0]), Math.round(rgba[1]), Math.round(rgba[2]), 255];
     });
+    const layer = L.imageOverlay(overlayImageUrl, bounds, { opacity: 1.0, interactive: false });
 
     const mapInstance = L.map(containerId).setView([44.5, -96.8], 10);
     registerPanelMap(containerId, mapInstance);
@@ -775,15 +1003,8 @@
       popupLayerControlContainer.prepend(title);
     }
 
-    mapInstance.once('moveend', () => {
-      void ensureLayerPainted(mapInstance, layer);
-    });
-    const bounds = layer.getBounds();
-    if (bounds && typeof bounds.isValid === 'function' && bounds.isValid()) {
-      mapInstance.fitBounds(bounds, { animate: false });
-    }
+    mapInstance.fitBounds(bounds, { animate: false });
     await waitForMoveEndOrTimeout(mapInstance, 200);
-    await ensureLayerPainted(mapInstance, layer);
 
     const legend = L.control({ position: 'bottomleft' });
     legend.onAdd = function () {
@@ -802,7 +1023,9 @@
     };
     legend.addTo(mapInstance);
 
-    L.control.scale({ position: 'bottomright', metric: true, imperial: false }).addTo(mapInstance);
+    const mapScale = L.control.scale({ position: 'bottomright', metric: true, imperial: false });
+    mapScale.addTo(mapInstance);
+    alignTillerLegendBetweenControls(mapInstance, legend, popupLayerControl, mapScale);
   }
 
   tillerBtn.addEventListener('click', async () => {
@@ -812,12 +1035,14 @@
 
       setSelectedActionButton(tillerBtn);
       showToast('Generating tiller density layer...', false, 0);
-      const { cog_url } = await postJson('/generateTillerDensityMap/', {
+      const { cog_url, classified_cog_url, class_breaks } = await postJson('/generateTillerDensityMap/', {
         polygon: window.drawnGeoJSON.geometry,
         crs: window.crs,
         date: dateInput.value,
       });
       window.tillerCogUrl = cog_url;
+      window.classifiedCogUrl = classified_cog_url || null;
+      window.classBreaks = Array.isArray(class_breaks) ? class_breaks : null;
       hidePanel('tiller-density-map');
       await renderRasterOnMainMap(cog_url, 'Tiller Density');
       showToast('Tiller density map added on AOI');
@@ -832,8 +1057,10 @@
       if (!window.tillerCogUrl) throw new Error('Generate the tiller density map first.');
       setSelectedActionButton(reportBtn);
       const cogUrl = window.tillerCogUrl;
+      const classifiedCogUrl = window.classifiedCogUrl || cogUrl;
       const content = document.getElementById('report-content');
       openPanel('report-container');
+      content.classList.remove('report-layout');
       content.innerHTML = '<div class="map-loading"><div class="spinner"></div><p>Building report...</p></div>';
 
       const statsGeoraster = await fetch(cogUrl).then(r => r.arrayBuffer()).then(parseGeoraster);
@@ -865,21 +1092,22 @@
           </div>
         </div>
         <div class="report-map-card">
-          <div class="report-map-title">Continuous Density Surface</div>
+          <div class="report-map-title">Tiller Density Map</div>
           <div id="density-map" class="report-map-canvas"></div>
         </div>
         <div class="report-map-card">
-          <div class="report-map-title">Classified Density (5 Classes)</div>
+          <div class="report-map-title">Classified Tiller Density Map</div>
           <div id="classified-map" class="report-map-canvas"></div>
-          <div id="classified-summary" class="class-summary"></div>
         </div>
       `;
+      content.classList.add('report-layout');
 
       await new Promise((resolve) => requestAnimationFrame(resolve));
       await renderRasterOnMap(cogUrl, 'density-map', 'Tiller Density');
-      await renderClassified(cogUrl, 'classified-map', 'classified-summary');
+      await renderClassified(classifiedCogUrl, 'classified-map', window.classBreaks);
     } catch (err) {
       console.error(err);
+      document.getElementById('report-content').classList.remove('report-layout');
       document.getElementById('report-content').innerHTML = `
         <div class="map-error">
           <h4>Error Generating Report</h4>
@@ -889,55 +1117,39 @@
     }
   });
 
-  async function renderClassified(cogUrl, containerId, summaryId = null) {
+  async function renderClassified(cogUrl, containerId, classBreaks = null) {
     const georaster = await fetch(cogUrl).then(r => r.arrayBuffer()).then(parseGeoraster);
-    const bandData = flattenBandValues(georaster.values[0]);
-    const valid = bandData.filter(v => Number.isFinite(v) && v !== NODATA && v > 0).sort((a, b) => a - b);
-
-    if (!valid.length) {
-      throw new Error('No valid raster values available for classification.');
+    const classColors = ['#d73027', '#fc8d59', '#fee08b', '#1a9850'];
+    let classLabels = ['Class 1', 'Class 2', 'Class 3', 'Class 4'];
+    if (Array.isArray(classBreaks) && classBreaks.length === 3) {
+      const q25 = Number(classBreaks[0]);
+      const q50 = Number(classBreaks[1]);
+      const q75 = Number(classBreaks[2]);
+      if ([q25, q50, q75].every(Number.isFinite)) {
+        classLabels = [
+          `< ${formatNumber(q25, 2)}`,
+          `${formatNumber(q25, 2)} - ${formatNumber(q50, 2)}`,
+          `${formatNumber(q50, 2)} - ${formatNumber(q75, 2)}`,
+          `≥ ${formatNumber(q75, 2)}`
+        ];
+      }
     }
 
-    const q20 = quantile(valid, 0.20);
-    const q40 = quantile(valid, 0.40);
-    const q60 = quantile(valid, 0.60);
-    const q80 = quantile(valid, 0.80);
-
-    const classColors = ['#f7fcb9', '#d9f0a3', '#78c679', '#31a354', '#006837'];
-    const classLabels = [
-      `< ${formatNumber(q20, 2)}`,
-      `${formatNumber(q20, 2)} - ${formatNumber(q40, 2)}`,
-      `${formatNumber(q40, 2)} - ${formatNumber(q60, 2)}`,
-      `${formatNumber(q60, 2)} - ${formatNumber(q80, 2)}`,
-      `≥ ${formatNumber(q80, 2)}`
-    ];
-
-    const classCounts = [0, 0, 0, 0, 0];
-    valid.forEach((v) => {
-      if (v < q20) classCounts[0] += 1;
-      else if (v < q40) classCounts[1] += 1;
-      else if (v < q60) classCounts[2] += 1;
-      else if (v < q80) classCounts[3] += 1;
-      else classCounts[4] += 1;
+    const classColorRGBA = classColors.map((hex) => {
+      const rgba = chroma(hex).rgba();
+      return [Math.round(rgba[0]), Math.round(rgba[1]), Math.round(rgba[2]), 255];
     });
-    const total = valid.length || 1;
-
-    const layer = new GeoRasterLayer({
-      georaster,
-      opacity: 1.0,
-      resolution: PANEL_MAP_RASTER_RESOLUTION,
-      resampleMethod: 'nearest',
-      keepBuffer: 2,
-      pixelValuesToColorFn: (val) => {
-        const scalar = toScalarPixelValue(val);
-        if (!Number.isFinite(scalar) || scalar === NODATA || scalar <= 0) return 'rgba(0,0,0,0)';
-        if (scalar < q20) return classColors[0];
-        if (scalar < q40) return classColors[1];
-        if (scalar < q60) return classColors[2];
-        if (scalar < q80) return classColors[3];
-        return classColors[4];
-      }
+    const bounds = georasterBoundsToLatLngBounds(georaster);
+    if (!bounds || !bounds.isValid()) {
+      throw new Error('Could not determine raster bounds for map overlay.');
+    }
+    const overlayImageUrl = buildRasterOverlayDataUrl(georaster, (scalar) => {
+      if (!Number.isFinite(scalar) || scalar === NODATA || scalar <= 0) return null;
+      const classId = Math.round(scalar);
+      if (classId < 1 || classId > 4) return null;
+      return classColorRGBA[classId - 1];
     });
+    const layer = L.imageOverlay(overlayImageUrl, bounds, { opacity: 1.0, interactive: false });
     const mapInstance = L.map(containerId).setView([44.5, -96.8], 10);
     registerPanelMap(containerId, mapInstance);
     const popupStreet = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -971,15 +1183,8 @@
       popupLayerControlContainer.prepend(title);
     }
 
-    mapInstance.once('moveend', () => {
-      void ensureLayerPainted(mapInstance, layer);
-    });
-    const bounds = layer.getBounds();
-    if (bounds && typeof bounds.isValid === 'function' && bounds.isValid()) {
-      mapInstance.fitBounds(bounds, { animate: false });
-    }
+    mapInstance.fitBounds(bounds, { animate: false });
     await waitForMoveEndOrTimeout(mapInstance, 200);
-    await ensureLayerPainted(mapInstance, layer);
 
     const legend = L.control({ position: 'bottomleft' });
     legend.onAdd = function () {
@@ -992,28 +1197,11 @@
         <div><span style="display:inline-block;width:16px;height:16px;background:${classColors[0]};margin-right:6px;"></span>${classLabels[0]}</div>
         <div><span style="display:inline-block;width:16px;height:16px;background:${classColors[1]};margin-right:6px;"></span>${classLabels[1]}</div>
         <div><span style="display:inline-block;width:16px;height:16px;background:${classColors[2]};margin-right:6px;"></span>${classLabels[2]}</div>
-        <div><span style="display:inline-block;width:16px;height:16px;background:${classColors[3]};margin-right:6px;"></span>${classLabels[3]}</div>
-        <div><span style="display:inline-block;width:16px;height:16px;background:${classColors[4]};margin-right:6px;"></span>${classLabels[4]}</div>`;
+        <div><span style="display:inline-block;width:16px;height:16px;background:${classColors[3]};margin-right:6px;"></span>${classLabels[3]}</div>`;
       return div;
     };
     legend.addTo(mapInstance);
     L.control.scale({ position: 'bottomright', metric: true, imperial: false }).addTo(mapInstance);
-
-    if (summaryId) {
-      const summaryEl = document.getElementById(summaryId);
-      if (summaryEl) {
-        summaryEl.innerHTML = classLabels.map((label, idx) => {
-          const pct = (classCounts[idx] * 100 / total);
-          return `
-            <div class="class-row">
-              <span class="class-color" style="background:${classColors[idx]};"></span>
-              <span class="class-label">${label}</span>
-              <span class="class-pct">${formatNumber(pct, 1)}%</span>
-            </div>
-          `;
-        }).join('');
-      }
-    }
   }
 
 })();
