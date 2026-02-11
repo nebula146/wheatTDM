@@ -2,12 +2,14 @@ services:
   web:
     build: .
     user: "${UID:-1000}:${GID:-1000}"
-    command: gunicorn tillerDensity.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+      gunicorn tillerDensity.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120"
     ports:
       - "8000:8000"
     volumes:
-      # Mount the service account key inside the container
-      - ./secrets/gee-key.json:/app/secrets/gee-key.json:ro
+      # Mount secrets directory so key path can be configured via env
+      - ./secrets:/app/secrets:ro
       # Persist media outputs (COGs, etc.)
       - ./media:/app/media
     environment:
@@ -25,8 +27,10 @@ services:
       HLS_SEARCH_WINDOW_DAYS: "${HLS_SEARCH_WINDOW_DAYS:-7}"
       LEGACY_INFER_URL: "${LEGACY_INFER_URL:-http://legacy-infer:5001/predict}"
     depends_on:
-      - db
-      - legacy-infer
+      db:
+        condition: service_healthy
+      legacy-infer:
+        condition: service_healthy
     restart: unless-stopped
 
   legacy-infer:
@@ -37,6 +41,12 @@ services:
       TF_CPP_MIN_LOG_LEVEL: "2"
     volumes:
       - ./tillerDensityModel:/models:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5001/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   db:
@@ -45,6 +55,11 @@ services:
       POSTGRES_DB: "${POSTGRES_DB:-geodjango_db}"
       POSTGRES_USER: "${POSTGRES_USER:-trying_geodjango}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trying_geodjango} -d ${POSTGRES_DB:-geodjango_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     ports:
       - "5432:5432"
     volumes:

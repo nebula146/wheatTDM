@@ -725,6 +725,34 @@ def predict_tiller_density(feature_input,height,width):
     return predict_density(feature_input, height, width)
 
 
+def classify_density_quantiles(density_array, nodata_value=-99999.0):
+    """
+    Classify continuous tiller density into 4 quantile classes.
+    Returns:
+      - classified_array (uint8): 0=nodata, 1..4=class id
+      - class_breaks: [q25, q50, q75]
+    """
+    valid_mask = (
+        np.isfinite(density_array)
+        & (density_array != nodata_value)
+        & (density_array > 0)
+    )
+    valid_values = density_array[valid_mask]
+    if valid_values.size == 0:
+        raise ValueError("No valid raster values available for classification.")
+
+    q25, q50, q75 = np.quantile(valid_values, [0.25, 0.50, 0.75]).astype(np.float32)
+
+    classified_array = np.zeros(density_array.shape, dtype=np.uint8)
+    classified_array[valid_mask & (density_array < q25)] = 1
+    classified_array[valid_mask & (density_array >= q25) & (density_array < q50)] = 2
+    classified_array[valid_mask & (density_array >= q50) & (density_array < q75)] = 3
+    classified_array[valid_mask & (density_array >= q75)] = 4
+
+    class_breaks = [float(q25), float(q50), float(q75)]
+    return classified_array, class_breaks
+
+
 
 
 
@@ -785,11 +813,27 @@ def TillerDensityMap(request):
             density_array[~valid_mask] = nodata_value
             print('Tiller Density prediction done')
 
+            classified_array, class_breaks = classify_density_quantiles(
+                density_array, nodata_value=nodata_value
+            )
+
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S") #timestamp for unique file name
             output_filename = f'tiller_density_map_{timestamp}.tif'
             output_path = os.path.join(settings.MEDIA_ROOT, output_filename)
+            classified_output_filename = f'classified_tiller_density_map_{timestamp}.tif'
+            classified_output_path = os.path.join(settings.MEDIA_ROOT, classified_output_filename)
             os.makedirs(settings.MEDIA_ROOT, exist_ok=True)
             create_outputRaster_COG(src_profile, clipped_transform, density_array, output_path, target_crs="EPSG:3857")
+            create_outputRaster_COG(
+                src_profile,
+                clipped_transform,
+                classified_array,
+                classified_output_path,
+                target_crs="EPSG:3857",
+                output_dtype="uint8",
+                nodata_value=0,
+                resampling_method="nearest",
+            )
 
             # Get raster metadata for client-side positioning
             with rasterio.open(output_path) as src:
@@ -799,6 +843,9 @@ def TillerDensityMap(request):
             cog_url = request.build_absolute_uri(
                 reverse('media_range', kwargs={'filename': output_filename})
             )
+            classified_cog_url = request.build_absolute_uri(
+                reverse('media_range', kwargs={'filename': classified_output_filename})
+            )
             print(f'cog_url: {cog_url}')
             # # Call your leafmap helper function to generate the map HTML.
             # map_html = generate_damage_map_html()
@@ -807,6 +854,8 @@ def TillerDensityMap(request):
             return JsonResponse({
                 'status': 'success',
                 'cog_url': cog_url,
+                'classified_cog_url': classified_cog_url,
+                'class_breaks': class_breaks,
                 'bounds': {
                     'left': bounds.left,
                     'bottom': bounds.bottom,
@@ -830,10 +879,18 @@ def TillerDensityMap(request):
 
 
 
-def create_outputRaster_COG(raster_profile, transform, predictArray, output_path, target_crs="EPSG:3857"):
+def create_outputRaster_COG(
+    raster_profile,
+    transform,
+    predictArray,
+    output_path,
+    target_crs="EPSG:3857",
+    output_dtype="float32",
+    nodata_value=-99999.0,
+    resampling_method="nearest",
+):
     """Reproject prediction array to a Cloud Optimized GeoTIFF."""
     from rasterio.warp import calculate_default_transform, reproject, Resampling
-    import numpy as np
 
     try:
         print(f"Target CRS: {target_crs}")
@@ -841,15 +898,26 @@ def create_outputRaster_COG(raster_profile, transform, predictArray, output_path
         print(f"Clipped Transform: {transform}")
         print(f"Array Shape: {predictArray.shape}")
 
+        out_dtype = np.dtype(output_dtype)
+        source_array = np.asarray(predictArray, dtype=out_dtype)
+        if np.issubdtype(out_dtype, np.integer):
+            nodata_cast = int(nodata_value)
+        else:
+            nodata_cast = float(nodata_value)
+
+        if not hasattr(Resampling, resampling_method):
+            raise ValueError(f"Unsupported resampling method: {resampling_method}")
+        resampling_enum = getattr(Resampling, resampling_method)
+
         left, top = transform * (0, 0)
-        right, bottom = transform * (predictArray.shape[1], predictArray.shape[0])
+        right, bottom = transform * (source_array.shape[1], source_array.shape[0])
         print(f"Computed Clipped Bounds: Left={left}, Right={right}, Top={top}, Bottom={bottom}")
 
         dst_transform, dst_width, dst_height = calculate_default_transform(
             raster_profile['crs'],
             target_crs,
-            predictArray.shape[1],
-            predictArray.shape[0],
+            source_array.shape[1],
+            source_array.shape[0],
             left=left,
             bottom=bottom,
             right=right,
@@ -859,7 +927,6 @@ def create_outputRaster_COG(raster_profile, transform, predictArray, output_path
         print(f"New Transform: {dst_transform}")
         print(f"New Size: Width={dst_width}, Height={dst_height}")
 
-        nodata_value = -99999.0
         profile = raster_profile.copy()
         profile.update(
             {
@@ -869,29 +936,29 @@ def create_outputRaster_COG(raster_profile, transform, predictArray, output_path
                 "width": dst_width,
                 "height": dst_height,
                 "count": 1,
-                "dtype": "float32",
+                "dtype": out_dtype.name,
                 "compress": "LZW",
-                "nodata": nodata_value,
+                "nodata": nodata_cast,
             }
         )
 
         for key in ["TILED", "BLOCKXSIZE", "BLOCKYSIZE", "INTERLEAVE"]:
             profile.pop(key.lower(), None)
 
-        destination = np.full((dst_height, dst_width), nodata_value, dtype=np.float32)
+        destination = np.full((dst_height, dst_width), nodata_cast, dtype=out_dtype)
 
         with rasterio.open(output_path, "w", **profile) as dst:
             reproject(
-                source=predictArray,
+                source=source_array,
                 destination=destination,
                 src_transform=transform,
                 src_crs=raster_profile["crs"],
                 dst_transform=dst_transform,
                 dst_crs=target_crs,
-                src_nodata=nodata_value,
-                dst_nodata=nodata_value,
+                src_nodata=nodata_cast,
+                dst_nodata=nodata_cast,
                 init_dest_nodata=True,
-                resampling=Resampling.nearest,
+                resampling=resampling_enum,
             )
             dst.write(destination, 1)
 
