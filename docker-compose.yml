@@ -1,6 +1,7 @@
 services:
   web:
     build: .
+    user: "${UID:-1000}:${GID:-1000}"
     command: gunicorn tillerDensity.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
     ports:
       - "8000:8000"
@@ -12,7 +13,7 @@ services:
     environment:
       DJANGO_DEBUG: "False"
       DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:-changeme}"
-      DJANGO_ALLOWED_HOSTS: "localhost,127.0.0.1"
+      DJANGO_ALLOWED_HOSTS: "localhost,127.0.0.1,20.55.251.138"
       POSTGRES_NAME: "${POSTGRES_DB:-geodjango_db}"
       POSTGRES_USER: "${POSTGRES_USER:-trying_geodjango}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
