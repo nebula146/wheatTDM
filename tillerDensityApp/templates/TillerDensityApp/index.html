@@ -3,10 +3,11 @@
 <head>
   <title>{{ page_title }}</title>
   {% load static %}
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
   <link rel="stylesheet" href="https://code.jquery.com/ui/1.13.2/themes/smoothness/jquery-ui.css" />
-  <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20260209g">
+  <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20260211h">
   <meta name="csrf-token" content="{{ csrf_token }}">
 </head>
 <body>
@@ -170,6 +171,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-  <script src="{% static 'js/app.js' %}?v=20260211c"></script>
+  <script src="{% static 'js/app.js' %}?v=20260211d"></script>
 </body>
 </html>

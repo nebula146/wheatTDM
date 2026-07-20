@@ -4,8 +4,14 @@
   const NODATA = -99999;
   const MIN_OVERLAY_LONG_SIDE_PX = 900;
   const MAX_OVERLAY_UPSCALE = 32;
+  const COMPACT_LAYOUT_QUERY = '(max-width: 900px)';
+  const compactLayoutMedia = window.matchMedia ? window.matchMedia(COMPACT_LAYOUT_QUERY) : null;
   const renderedPanelMaps = new Map();
   const PANEL_MAP_RASTER_RESOLUTION = 32;
+
+  function isCompactLayout() {
+    return !!(compactLayoutMedia && compactLayoutMedia.matches);
+  }
 
   function reportBootstrapError(message) {
     console.error(message);
@@ -168,6 +174,12 @@
 
   function clampPanelToStage(panel) {
     if (!panel || !mapStage) return;
+    if (isCompactLayout()) {
+      panel.style.left = '';
+      panel.style.top = '';
+      panel.style.right = '';
+      return;
+    }
     const stageRect = mapStage.getBoundingClientRect();
     const leftMax = Math.max(12, stageRect.width - panel.offsetWidth - 12);
     const topMax = Math.max(88, stageRect.height - panel.offsetHeight - 12);
@@ -256,6 +268,17 @@
     addDockButton(panelId);
   }
 
+  function minimizeOtherPanels(activePanelId) {
+    if (!isCompactLayout()) return;
+    panelIds.forEach((id) => {
+      if (id === activePanelId) return;
+      const panel = document.getElementById(id);
+      if (!panel || panel.style.display === 'none') return;
+      panel.style.display = 'none';
+      addDockButton(id);
+    });
+  }
+
   function initPanelDrag(panel) {
     if (!panel) return;
     const header = panel.querySelector('.panel-header');
@@ -268,6 +291,7 @@
     let startTop = 0;
 
     header.addEventListener('pointerdown', (e) => {
+      if (isCompactLayout()) return;
       if (e.target.closest('button')) return;
       if (panel.style.display === 'none') return;
       dragging = true;
@@ -313,9 +337,15 @@
     const panel = document.getElementById(panelId);
     if (!panel) return;
     removeDockButton(panelId);
+    minimizeOtherPanels(panelId);
     panel.style.display = 'block';
     bringPanelToFront(panel);
-    if (panel.dataset.userPositioned === '1') {
+    if (isCompactLayout()) {
+      panel.dataset.userPositioned = '0';
+      panel.style.left = '';
+      panel.style.top = '';
+      panel.style.right = '';
+    } else if (panel.dataset.userPositioned === '1') {
       clampPanelToStage(panel);
     } else {
       autoPlacePanel(panelId);
@@ -354,14 +384,46 @@
       panel.addEventListener('pointerdown', () => bringPanelToFront(panel));
     }
   });
-  window.addEventListener('resize', () => {
+  const handleViewportChange = () => {
     panelIds.forEach((id) => {
       const panel = document.getElementById(id);
       if (panel && panel.style.display !== 'none') {
         clampPanelToStage(panel);
       }
     });
+    if (isCompactLayout()) {
+      let keepVisible = null;
+      panelIds.forEach((id) => {
+        const panel = document.getElementById(id);
+        if (!panel || panel.style.display === 'none') return;
+        if (!keepVisible) {
+          keepVisible = id;
+          return;
+        }
+        panel.style.display = 'none';
+        addDockButton(id);
+      });
+    }
+    try {
+      map.invalidateSize();
+    } catch (err) {
+      console.warn('Failed to resize base map:', err);
+    }
+    renderedPanelMaps.forEach((panelMap) => {
+      try {
+        panelMap.invalidateSize();
+      } catch (err) {
+        console.warn('Failed to resize panel map:', err);
+      }
+    });
+  };
+  window.addEventListener('resize', handleViewportChange);
+  window.addEventListener('orientationchange', () => {
+    window.setTimeout(handleViewportChange, 140);
   });
+  if (compactLayoutMedia && typeof compactLayoutMedia.addEventListener === 'function') {
+    compactLayoutMedia.addEventListener('change', handleViewportChange);
+  }
 
   dateInput.addEventListener('change', maybeEnableButtons);
 
@@ -485,7 +547,7 @@
       await fitMapForPdfBestView(classifiedMap);
 
       const canvas = await window.html2canvas(reportPanel, {
-        scale: 2,
+        scale: isCompactLayout() ? 1.5 : 2,
         useCORS: true,
         logging: false,
         backgroundColor: '#274563',
@@ -692,8 +754,10 @@
 
     // Upscale tiny rasters with nearest-neighbor to avoid browser blur.
     const longestSide = Math.max(width, height);
-    let upscaleFactor = Math.ceil(MIN_OVERLAY_LONG_SIDE_PX / Math.max(1, longestSide));
-    upscaleFactor = Math.max(1, Math.min(MAX_OVERLAY_UPSCALE, upscaleFactor));
+    const minOverlayLongSidePx = isCompactLayout() ? 640 : MIN_OVERLAY_LONG_SIDE_PX;
+    const maxUpscale = isCompactLayout() ? Math.min(16, MAX_OVERLAY_UPSCALE) : MAX_OVERLAY_UPSCALE;
+    let upscaleFactor = Math.ceil(minOverlayLongSidePx / Math.max(1, longestSide));
+    upscaleFactor = Math.max(1, Math.min(maxUpscale, upscaleFactor));
     if (upscaleFactor === 1) {
       return canvas.toDataURL('image/png');
     }

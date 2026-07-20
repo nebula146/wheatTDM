@@ -252,22 +252,26 @@ def fetch_gee_image(polygon_geojson, date_str, polygon_crs_epsg=4326):
 
         # Note: cloud masking disabled per request; using raw bands.
 
-        scaling = 0.0001
+        # NASA/HLS/{HLSL30,HLSS30}/v002 already return properly-scaled surface
+        # reflectance as floats (confirmed directly against Earth Engine: raw
+        # B4 comes back in the 0.0088-0.6846 range) -- no additional 0.0001
+        # scale factor needed. Applying one here was shrinking every band to
+        # ~1e-5, far outside anything the model was trained on.
         if product_used == "S30":
             # Sentinel-2 based HLS (v002) band names
-            b = image.select("B2").multiply(scaling).rename("B")
-            g = image.select("B3").multiply(scaling).rename("G")
-            r = image.select("B4").multiply(scaling).rename("R")
-            nir = image.select("B8A").multiply(scaling).rename("NIR")
-            swir1 = image.select("B11").multiply(scaling).rename("SWIR1")
-            swir2 = image.select("B12").multiply(scaling).rename("SWIR2")
+            b = image.select("B2").rename("B")
+            g = image.select("B3").rename("G")
+            r = image.select("B4").rename("R")
+            nir = image.select("B8A").rename("NIR")
+            swir1 = image.select("B11").rename("SWIR1")
+            swir2 = image.select("B12").rename("SWIR2")
         else:  # L30 (Landsat-based HLS v002)
-            b = image.select("B2").multiply(scaling).rename("B")
-            g = image.select("B3").multiply(scaling).rename("G")
-            r = image.select("B4").multiply(scaling).rename("R")
-            nir = image.select("B5").multiply(scaling).rename("NIR")
-            swir1 = image.select("B6").multiply(scaling).rename("SWIR1")
-            swir2 = image.select("B7").multiply(scaling).rename("SWIR2")
+            b = image.select("B2").rename("B")
+            g = image.select("B3").rename("G")
+            r = image.select("B4").rename("R")
+            nir = image.select("B5").rename("NIR")
+            swir1 = image.select("B6").rename("SWIR1")
+            swir2 = image.select("B7").rename("SWIR2")
 
         final_image = ee.Image.cat([b, g, r, nir, swir1, swir2]).clip(roi)
 
